@@ -25,8 +25,9 @@ Add Try-Except
 
 class XmlExporter(xmlexporter.XmlExporter):
 
-    def __init__(self, server, export_values: bool = False, progress_callback = ()):
-        super().__init__(server, export_values)
+    def __init__(self, client: ua = None, export_values: bool = False, progress_callback = ()):
+        super().__init__(client, export_values)
+        self.client = client
         self.progress_callback = progress_callback
 
     async def build_etree(self, node_list):
@@ -44,15 +45,37 @@ class XmlExporter(xmlexporter.XmlExporter):
         await self._add_namespaces(node_list)
 
         # add all nodes in the list to the XML etree
-        progress = 0
+        progress = 1
         for node in node_list:
-            try:
-                await self.node_to_etree(node)
-                self.progress_callback(progress)
-                progress = progress + 1
-            except Exception as e:
-                self.logger.warn("Error building etree for node %s: %s" % (node, e))
-                traceback.print_exc()
+            while True:
+                try:
+                    await self.node_to_etree(node)
+                    break  # Exit the retry loop on success
+                except Exception as e:
+                    self.logger.warning(f"Error exporting node {node}: {e}")
+
+                    # if error is connection related, try to reconnect
+                    if "connection" in str(e).lower() or "disconnected" in str(e).lower():
+                        self.logger.info("Connection error detected, attempting to reconnect ...")
+                        try:
+                            if self.client is not None:
+                                await self.client.disconnect()
+                                await asyncio.sleep(1)
+                                await self.client.connect()
+                                self.logger.info("Reconnection successful.")
+                        except Exception as e2:
+                            self.logger.error(f"Reconnection failed: {e2}")
+                            await asyncio.sleep(1)
+                            continue  # retry reconnection
+                        await asyncio.sleep(1)
+                        self.logger.info(f"Resuming export at node {progress}/{len(node_list)} ...")
+                        continue  # retry the node export after reconnection
+                    else:
+                        self.logger.error("Non-connection related error, skipping node.")
+                        break  # Exit the retry loop on non-connection errors
+
+            self.progress_callback(progress)
+            progress = progress + 1
 
         # add aliases to the XML etree
         self._add_alias_els()

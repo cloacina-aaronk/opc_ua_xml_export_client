@@ -33,26 +33,25 @@ class NodeXMLExporter:
                 await self.iterater_over_child_nodes(child, browse_progressbar)
 
     async def export_xml(self, namespaces=None, output_file="export.xml", export_values=False):
-        if namespaces:
-            self.logger.info("Export only NS %s" % namespaces)
-            nodes = [node for node in self.nodes if node.nodeid.NamespaceIndex in namespaces]
-        else:
-            nodes = self.nodes
-
-        self.logger.info("Export nodes to %s" % output_file)
-        self.logger.info("Export node values: %s" % export_values)
-        bar = progressbar.ProgressBar(max_value=len(nodes))
-        exp = XmlExporter(self.client, export_values, bar.update)
-        await exp.build_etree(nodes)
-        await exp.write_xml(output_file)
-        self.logger.info("Export finished")
+        # Export each namespace separately
+        for ns in (namespaces if namespaces else self.namespaces.keys()):
+            nodes = [node for node in self.nodes if node.nodeid.NamespaceIndex == ns]
+            bar = progressbar.ProgressBar(max_value=len(nodes))
+            exp = XmlExporter(self.client, export_values, bar.update)
+            output_file_ns = f"{output_file.split('.xml')[0]}_ns{ns}.xml"
+            self.logger.info(f"Starting export of {len(nodes)} nodes from namespace {ns} to {output_file_ns}...")
+            await exp.build_etree(nodes)
+            await exp.write_xml(output_file_ns)
+            self.logger.info(f"Export of namespace {ns} finished")
+        
+        self.logger.info("All exports finished")
 
     async def import_nodes(self, server_url="opc.tcp://localhost:16664", username="", password=""):
         from asyncua.crypto import security_policies
         import types
-        from asyncua.ua.uaprotocol_hand import CryptographyNone
+        #from asyncua.ua.uaprotocol_hand import CryptographyNone
 
-        self.client = Client(server_url)
+        self.client = Client(server_url, timeout=4)
         if username is not None:
             self.client.set_user(username)
 
@@ -86,6 +85,8 @@ class NodeXMLExporter:
         root = self.client.get_root_node()
         self.logger.info("Starting to collect nodes. This may take some time ...")
         await self.start_node_browse(root)
+        # sort nodes by namespace index and nodeid
+        self.nodes.sort(key=lambda n: (int(n.nodeid.NamespaceIndex), str(n.nodeid.Identifier)))
         self.logger.info("All nodes collected")
 
     async def statistics(self):
